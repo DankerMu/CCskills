@@ -7,14 +7,7 @@ description: Create GitHub issues from PRD or requirements. Auto-detects complex
 
 ## Role in Architecture
 
-```
-Claude Code (主控)
-    │
-    └── gh-create-issue (本 skill)
-            │
-            ├── Claude Code 执行: gh cli 调用、issue 创建
-            └── 不涉及 codeagent (无代码编写)
-```
+See [gh-flow Architecture](../gh-flow/SKILL.md#architecture) for complete workflow diagram.
 
 **This skill**: Claude Code directly executes (no code writing involved).
 
@@ -160,3 +153,8 @@ gh issue list --limit 1  # Must have issue permissions
 | Not authenticated | Run `gh auth login` |
 | No issue permission | Check repo permissions or token scope |
 | Label not exists | Auto-creates required labels |
+
+## Related Skills
+
+- [gh-flow](../gh-flow/SKILL.md) - Complete workflow orchestration
+- [gh-issue-implement](../gh-issue-implement/SKILL.md) - Implement created issues

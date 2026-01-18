@@ -7,15 +7,7 @@ description: Generate Release Notes and create GitHub Release. Calculates versio
 
 ## Role in Architecture
 
-```
-Claude Code (主控)
-    │
-    └── gh-release (本 skill)
-            │
-            ├── Claude Code 执行: 版本计算、PR 信息收集、release 创建
-            │
-            └── 可选委托 Codeagent: 复杂 release notes 文案生成
-```
+See [gh-flow Architecture](../gh-flow/SKILL.md#architecture) for complete workflow diagram.
 
 **This skill**: Mostly Claude Code execution (gh cli calls). Codeagent optional for complex notes.
 
@@ -136,3 +128,8 @@ URL: https://github.com/owner/repo/releases/tag/v1.2.0
 | No merged PRs | Return error, skip release |
 | Epic not found | Fallback to custom mode |
 | Permission denied | Return error with permission info |
+
+## Related Skills
+
+- [gh-flow](../gh-flow/SKILL.md) - Workflow orchestration
+- [gh-create-issue](../gh-create-issue/SKILL.md) - Epic structure for epic mode
