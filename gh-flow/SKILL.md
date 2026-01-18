@@ -45,27 +45,6 @@ description: |
 - **Skills**: Define workflow steps and invoke codeagent.
 - **Codeagent (Codex)**: Execute ALL implementation tasks.
 
-## Overview
-
-End-to-end development workflow from PRD to merged code. Orchestrates gh-create-issue, gh-issue-implement, gh-pr-review, and gh-release skills.
-
-## When to Use
-
-- User requests "complete implementation of a feature"
-- User requests "end-to-end development"
-- User requests "from requirements to release"
-
-## Usage
-
-**Invoke via skill call:**
-```
-Call gh-flow skill with:
-  - input: PRD or requirements
-  - mode: auto | manual
-  - generate_release: true | false
-  - output: Execution report
-```
-
 ## Parameters
 
 | Parameter | Required | Default | Description |
@@ -78,188 +57,129 @@ Call gh-flow skill with:
 
 ## Workflow
 
-### Serial Mode (parallel=false, default)
-```
-For each issue:
-  Issue → Branch → Code → PR → Review → Merge
-                                    ↓
-                              Next Issue
-```
-
-### Parallel Mode (parallel=true)
-```
-Stage 1: Create issues with dependency info
-Stage 2: Build dependency DAG → Topological sort → Execution layers
-Stage 3: Execute layers (issues in same layer run concurrently)
-Stage 4: Release (optional)
-```
-
 ### Stage 1: Issue Creation
-```
-Call gh-create-issue skill:
-  input: PRD content
-  output: { epic_num, issues: [{ num, title, priority, depends_on }] }
-```
-
-### Stage 2: Dependency Analysis (parallel mode only)
-```
-# Build dependency graph
-GRAPH = {}
-For each issue in issues:
-  GRAPH[issue.num] = issue.depends_on
-
-# Detect cycles
-If has_cycle(GRAPH):
-  Error: "Circular dependency detected"
-
-# Topological sort into layers (Kahn's algorithm)
-LAYERS = topological_sort_layers(GRAPH)
-# Example output:
-#   LAYERS[0] = [101, 104]  # No dependencies
-#   LAYERS[1] = [102]       # Depends on 101
-#   LAYERS[2] = [103]       # Depends on 102
+```bash
+# Call gh-create-issue skill
+# Output: { epic_num: 100, issues: [
+#   { num: 101, title: "Login API", depends_on: [] },
+#   { num: 102, title: "JWT management", depends_on: [101] },
+#   { num: 104, title: "Logging", depends_on: [] }
+# ]}
 ```
 
-### Stage 3a: Serial Development Loop (parallel=false)
-```
-MERGED_PRS = []
+### Stage 2: Implementation
 
-For each issue_num in ISSUE_LIST:
-  # Implement
-  Call gh-issue-implement skill:
-    input: issue_num
-    output: pr_num
+**Serial Mode (parallel=false, default)**:
+```bash
+# Issue 101
+gh issue view 101
+git checkout -b feature/issue-101-login-api
+# Call gh-issue-implement → codeagent implements
+git push -u origin feature/issue-101-login-api
+gh pr create --title "Login API" --body "Closes #101"
+# Call gh-pr-review → merge PR #200
 
-  # Review & Merge (retry until success)
-  Loop:
-    Call gh-pr-review skill:
-      input: pr_num
-      output: { status, merged_sha, issues }
-
-    If status == MERGED:
-      Append pr_num to MERGED_PRS
-      Break → Next issue
-    Elif status == BLOCKED:
-      Pause for manual resolution
-    Else:
-      Wait for fix cycle (auto-triggered by gh-pr-review)
-      Continue loop
+# Issue 102 (after 101 merged)
+git checkout main && git pull
+git checkout -b feature/issue-102-jwt-management
+# ... repeat process
 ```
 
-### Stage 3b: Parallel Development Loop (parallel=true)
-```
-MERGED_PRS = []
-FAILED_ISSUES = []
-SKIPPED_ISSUES = []
+**Parallel Mode (parallel=true)**:
 
-For each layer in LAYERS:
-  # Filter out issues blocked by failed dependencies
-  executable = filter_by_deps(layer, FAILED_ISSUES)
-  skipped = layer - executable
-  SKIPPED_ISSUES.extend(skipped)
+并行模式使用独立 repo 副本避免分支冲突：
 
-  # Execute issues in this layer concurrently (up to max_concurrency)
-  results = parallel_for issue_num in executable (max=max_concurrency):
-    # Implement
-    Call gh-issue-implement skill:
-      input: issue_num
-      output: pr_num
+```bash
+# Layer 0: Issues 101 and 104 (no dependencies) - concurrent development
 
-    # Review & Merge (retry until success)
-    Loop:
-      Call gh-pr-review skill:
-        input: pr_num
-        output: { status, merged_sha, issues }
+# Task 1: Issue 101 in isolated repo clone
+CLONE_101=/tmp/repo-clone-101
+git clone <repo-url> $CLONE_101
 
-      If status == MERGED:
-        return { issue_num, pr_num, status: SUCCESS }
-      Elif status == BLOCKED:
-        return { issue_num, pr_num, status: BLOCKED }
-      Else:
-        Wait for fix cycle
-        Continue loop (max 3 retries)
-    return { issue_num, pr_num, status: FAILED }
+# Call gh-issue-implement with workdir=$CLONE_101
+# gh-issue-implement will:
+#   cd $CLONE_101
+#   git checkout -b feature/issue-101-login-api
+#   call codeagent (codex) to implement in $CLONE_101
+#   git push -u origin feature/issue-101-login-api
+#   gh pr create --title "Login API" --body "Closes #101"  # PR #200
 
-  # Collect results
-  For each result in results:
-    If result.status == SUCCESS:
-      Append result.pr_num to MERGED_PRS
-    Else:
-      Append result.issue_num to FAILED_ISSUES
+# Task 2: Issue 104 (concurrent with Task 1, same process)
+CLONE_104=/tmp/repo-clone-104
+git clone <repo-url> $CLONE_104
+# Call gh-issue-implement with workdir=$CLONE_104 → PR #201
 
-  # Wait for all in layer before proceeding to next layer
-  wait_all()
+# Review & Merge (serial, in issue number order)
+gh pr view 200 --json statusCheckRollup,reviewDecision
+# If CI fail or review rejected: call gh-issue-implement with workdir to fix, retry
+gh pr merge 200 --squash
+rm -rf $CLONE_101
+
+gh pr view 201 --json statusCheckRollup,reviewDecision
+# If fail: same fix process
+gh pr merge 201 --squash
+rm -rf $CLONE_104
+
+# Layer 1: Issue 102 (depends on 101) - after Layer 0 complete
+git checkout main && git pull
+git checkout -b feature/issue-102-jwt-management
+# Call gh-issue-implement in main repo
 ```
 
-### Stage 4: Release (optional)
-```
-If generate_release && MERGED_PRS not empty:
-  Call gh-release skill:
-    input: MERGED_PRS, EPIC_NUM
-    output: Release URL
+### Stage 3: Release (optional)
+```bash
+# If generate_release=true
+# Pass epic_number from Stage 1 (gh-create-issue output)
+gh release create v1.2.0 --generate-notes --notes "Epic #100 complete"
+
+# Or call gh-release skill with epic mode:
+# gh-release --mode epic --epic_number 100 --prs 200,201,202
 ```
 
 ## Serial vs Parallel Mode
 
 ### Serial Mode (parallel=false, default)
 ```
-issue1 → PR1 → review1 → merge1
-                            ↓
-issue2 → PR2 → review2 → merge2
-                            ↓
-issue3 → PR3 → review3 → merge3
+issue1 → branch → code → PR1 → review → merge
+                                    ↓
+issue2 → branch → code → PR2 → review → merge
 ```
 
-Benefits:
-- Simple, predictable execution order
-- No branch conflicts between PRs
+**Benefits**:
+- Simple, single repo directory
+- No branch conflicts
 - Suitable for tightly coupled issues
 
 ### Parallel Mode (parallel=true)
 ```
-Given dependencies:
-  101 ← 102 ← 103
-  104 (independent)
+Given dependencies: 101 ← 102 ← 103, 104 (independent)
 
-Execution:
-  Layer 0: [101, 104] → concurrent
-           ↓
-  Layer 1: [102]      → after Layer 0 complete
-           ↓
-  Layer 2: [103]      → after Layer 1 complete
+Layer 0 (concurrent development):
+  /tmp/repo-clone-101: issue 101 → PR #200
+  /tmp/repo-clone-104: issue 104 → PR #201
+
+Layer 0 (serial merge):
+  Review PR #200 → merge → cleanup /tmp/repo-clone-101
+  Review PR #201 → merge → cleanup /tmp/repo-clone-104
+
+Layer 1:
+  Main repo: issue 102 → PR #202 → review → merge
+
+Layer 2:
+  Main repo: issue 103 → PR #203 → review → merge
 ```
 
-Benefits:
-- Faster for independent issues
-- Respects dependency order
-- Configurable concurrency limit
+**Benefits**:
+- Faster for independent issues (concurrent development)
+- Respects dependency order (layered execution)
+- Isolated repo clones prevent branch conflicts
 
-### Merge Strategy in Parallel Mode
-
-Within same layer:
-- All issues develop concurrently on separate branches
-- Merge in issue number order (deterministic)
-- If conflict detected, rebase and retry once
-
-Between layers:
-- Lower layer must fully complete before upper layer starts
-- Ensures dependency code is merged first
-
-## Skill Orchestration
-
-```
-gh-flow (orchestrator)
-    │
-    ├── gh-create-issue
-    │
-    ├── gh-issue-implement ──→ codeagent (codex)
-    │
-    ├── gh-pr-review ──→ codeagent (codex)
-    │       │
-    │       └──→ gh-issue-implement (on failure)
-    │
-    └── gh-release
-```
+**Key Mechanism**:
+- Each concurrent issue uses isolated repo clone (`/tmp/repo-clone-<issue-num>`)
+- Development happens in parallel
+- Review and merge happen serially (in issue number order)
+- Cleanup repo clone after merge
+- Next layer starts after previous layer fully merged
 
 ## Execution Modes
 
@@ -329,8 +249,10 @@ command -v git   # Required for version control
 |-------|------------|
 | Circular dependency | Abort with error, require manual fix in issues |
 | Dependency failed | Skip all downstream issues, mark as DEPENDENCY_BLOCKED |
-| Concurrent merge conflict | Rebase and retry once, then BLOCKED |
-| Max retries exceeded | Mark as FAILED, continue with other issues |
+| Repo clone exists | Remove existing clone: `rm -rf /tmp/repo-clone-<num>` |
+| Clone cleanup fail | Log warning, continue (orphaned clones cleaned by system) |
+| Concurrent merge conflict | Impossible (merge is serial), but if occurs: rebase in clone and retry |
+| Max retries exceeded | Mark as FAILED, cleanup clone, continue with other issues |
 
 ### Status Codes (Parallel Mode)
 
@@ -342,8 +264,37 @@ command -v git   # Required for version control
 | DEPENDENCY_BLOCKED | Skipped due to failed dependency |
 | SKIPPED | Filtered out before execution |
 
-### Return Format (Parallel Mode)
+### Status Code Mapping
 
+Integration with gh-pr-review status codes:
+
+| gh-pr-review | gh-flow | Meaning |
+|--------------|---------|---------|
+| MERGED | SUCCESS | PR merged successfully |
+| CI_FAILED | FAILED | CI checks failed, retry exhausted |
+| CHANGES_REQUESTED | FAILED | Code review failed, retry exhausted |
+| BLOCKED | BLOCKED | Manual intervention required |
+
+## Return Format
+
+**Serial Mode**:
+```
+========================================
+GitHub Flow Complete
+========================================
+📋 Issues: 3
+💻 PRs: 3
+✅ Merged: 3
+📦 Release: v1.2.0
+
+Epic #100 Progress:
+- [x] #101 Login API
+- [x] #102 JWT management
+- [x] #103 Permission middleware
+========================================
+```
+
+**Parallel Mode** (adds execution layers and status details):
 ```
 ========================================
 GitHub Flow Complete (Parallel)
@@ -367,3 +318,10 @@ Epic #100 Progress:
 - [x] #104 Logging module
 ========================================
 ```
+
+## Related Skills
+
+- [gh-create-issue](../gh-create-issue/SKILL.md) - Issue creation and epic management
+- [gh-issue-implement](../gh-issue-implement/SKILL.md) - Issue implementation
+- [gh-pr-review](../gh-pr-review/SKILL.md) - PR review and merge
+- [gh-release](../gh-release/SKILL.md) - Release notes generation
