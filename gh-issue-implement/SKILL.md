@@ -1,6 +1,6 @@
 ---
 name: gh-issue-implement
-description: Implement GitHub issue by number. Fetches issue details via gh cli, calls codeagent skill (backend=codex) for development, creates PR linked to issue. Requires 90% test coverage.
+description: Implement GitHub issue by number. Fetches issue details via gh cli, directly implements code and tests, creates PR linked to issue. Requires 90% test coverage.
 ---
 
 # GitHub Issue Implementation
@@ -12,20 +12,21 @@ Claude Code (主控)
     │
     └── gh-issue-implement (本 skill)
             │
-            ├── Claude Code 执行: issue 获取、repo clone (并行模式)、分支创建、push、PR 创建
-            │
-            └── 委托 Codeagent (Codex):
+            └── Claude Code 执行:
+                  - issue 获取
+                  - 分支创建
                   - 代码实现
-                  - 测试编写
-                  - 测试验证
-                  - git commit (本地)
+                  - 测试编写和验证
+                  - git commit
+                  - push
+                  - PR 创建
 ```
 
-**Key Principle**: Claude Code does NOT write code directly. All implementation delegated to codeagent.
+**Key Principle**: Claude Code directly implements code, tests, and commits changes.
 
 ## Overview
 
-Given an issue number, fetch its details and implement the feature. Uses codeagent skill (codex backend) for development, ensuring 90% test coverage, then creates a PR.
+Given an issue number, fetch its details and directly implement the feature. Ensures 90% test coverage, then creates a PR.
 
 ## When to Use
 
@@ -47,18 +48,26 @@ Call gh-issue-implement skill with:
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | issue_number | Yes | GitHub issue number to implement |
-| workdir | No | Working directory (default: current). For parallel mode, use isolated clone path like `/tmp/repo-clone-<issue-num>` |
 
 ## Workflow
 
 1. **Fetch issue** via `gh issue view <number>`
-2. **Create dedicated branch** (每个 issue 必须独立分支):
+2. **Create dedicated branch**:
    ```bash
    git checkout main && git pull origin main
    git checkout -b feature/issue-<number>-<short-desc>
    ```
-3. **Call codeagent skill** with issue content (backend=codex)
-4. **Push branch & create PR**:
+3. **Implement code and tests**:
+   - Write implementation code following existing patterns
+   - Write comprehensive unit tests (>=90% coverage)
+   - Run tests and fix any failures
+   - Verify coverage threshold
+4. **Commit changes**:
+   ```bash
+   git add .
+   git commit -m "Implement #<number>: <title>"
+   ```
+5. **Push branch & create PR**:
    ```bash
    git push -u origin feature/issue-<number>-<short-desc>
    gh pr create --title "..." --body "Closes #<number>"
@@ -114,104 +123,40 @@ main ─────────────────────────
        ▼                                    │
        feature/issue-123-xxx ──► PR #200 ───┘
                     │
-                    └── commits by codeagent
+                    └── commits by Claude Code
 ```
 
 1. **创建**: 从最新 main 分支切出
-2. **开发**: codeagent 在分支上提交代码
-3. **推送**: `git push -u origin <branch>`
-4. **PR**: 创建 PR 并关联 issue
-5. **合并**: review 通过后 squash merge
-6. **清理**: 合并后删除 feature 分支
+2. **开发**: 直接在分支上编写代码和测试
+3. **提交**: git commit 提交变更
+4. **推送**: `git push -u origin <branch>`
+5. **PR**: 创建 PR 并关联 issue
+6. **合并**: review 通过后 squash merge
+7. **清理**: 合并后删除 feature 分支
 
-## Codeagent Invocation
+## Implementation Guidelines
 
-> **前置条件**: 执行前需加载 `codeagent` skill，了解超时设置（默认 2 小时）和任务状态检查方法。
-
-**Command**:
-```bash
-codeagent-wrapper --backend codex - <<'EOF'
-<task content>
-EOF
-```
-
-**Task Content Template**:
-```
-## Issue #<number>: <title>
-
-## Requirements
-<issue body content>
-
-## Acceptance Criteria
-<from issue, or derive from requirements>
-
-## Technical Constraints
-- Test coverage >= 90%
-- All tests must pass before completion
+**Code Quality:**
 - Follow existing code patterns in the repository
-- Include unit tests for all new functions
+- Keep functions small and focused
+- Use clear, descriptive variable names
+- Add comments only for non-obvious logic
 
-## Context Files
-@<relevant source files>
-@<relevant test files>
-@<config files if needed>
+**Testing:**
+- Write unit tests for all new functions
+- Test happy path and edge cases
+- Test error handling
+- Verify >= 90% test coverage
 
-## Deliverables
-1. Implementation code
-2. Unit tests with >= 90% coverage
-3. Run tests and verify passing
-4. Git commit with descriptive message
+**Commit Message:**
 ```
+Implement #<issue_number>: <short description>
 
-**Codeagent Responsibilities**:
-- Analyze requirements and plan implementation
-- Write implementation code
-- Write comprehensive unit tests
-- Run tests and fix failures
-- Verify coverage meets 90% threshold
-- Git commit (local)
+- Bullet point summary of changes
+- Focus on what and why, not how
 
-**Claude Code Responsibilities** (before/after codeagent):
-- Fetch issue details via `gh issue view`
-- Create feature branch
-- After codeagent completes: push and create PR
-
-## Parallel Mode Usage
-
-When called by gh-flow in parallel mode, this skill operates in isolated repo clones:
-
-**Serial Mode (default)**:
-```bash
-# In main repo
-gh-issue-implement 123
-# Creates branch, calls codeagent, pushes, creates PR
+Closes #<issue_number>
 ```
-
-**Parallel Mode (via gh-flow)**:
-```bash
-# gh-flow creates isolated clone first
-CLONE_PATH=/tmp/repo-clone-123
-git clone <repo-url> $CLONE_PATH
-
-# Then calls gh-issue-implement with workdir
-gh-issue-implement 123 --workdir $CLONE_PATH
-
-# Workflow in isolated clone:
-cd $CLONE_PATH
-git checkout -b feature/issue-123-xxx
-# codeagent implements in $CLONE_PATH
-git push -u origin feature/issue-123-xxx
-gh pr create --title "..." --body "Closes #123"
-
-# After PR merged, gh-flow cleans up:
-rm -rf $CLONE_PATH
-```
-
-**Key Points**:
-- Isolated clones prevent branch conflicts during concurrent development
-- Each issue gets its own `/tmp/repo-clone-<issue-num>` directory
-- Cleanup happens after PR merge
-- Serial merge order ensures no conflicts
 
 ## Return Format
 
@@ -263,10 +208,10 @@ When detected, verifies epic exists and has `epic` label before associating.
 | Branch exists | Switch to existing branch, verify clean state |
 | Branch diverged | Rebase on main: `git rebase main` |
 | PR exists | Update existing PR |
-| Tests fail | Codeagent retries until pass |
+| Tests fail | Fix and retry |
 | Push rejected | Pull and rebase, then retry push |
 
 ## Related Skills
 
-- [gh-flow](../gh-flow/SKILL.md) - Workflow orchestration (parallel mode)
+- [gh-flow](../gh-flow/SKILL.md) - Workflow orchestration
 - [gh-pr-review](../gh-pr-review/SKILL.md) - Review created PRs
