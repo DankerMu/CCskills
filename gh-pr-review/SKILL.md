@@ -1,196 +1,93 @@
 ---
 name: gh-pr-review
-description: Review and merge GitHub PR. Performs code review via codeagent (codex backend), checks CI status. Pass → auto-merge; Fail → comment issues and call gh-issue-implement for fixes. Returns standardized JSON result.
+description: |
+  Review and merge GitHub PR. Uses local codeagent for review, checks CI, auto-merges on pass or calls gh-issue-implement on fail.
+
+  Input: pr_number → Output: JSON { status, score, issues }
+
+  Part of gh-flow workflow. See gh-flow for architecture.
 ---
 
 # GitHub PR Review & Merge
 
-## Role in Architecture
+## Workflow
 
-See [gh-flow Architecture](../gh-flow/SKILL.md#architecture) for complete workflow diagram.
-
-**This skill**: Codex reviews via @codex comment, Codeagent fixes via gh-issue-implement.
-
-**Key Principle**:
-- Code review by Codex (via @codex comment)
-- Bug fixes by Codeagent (via gh-issue-implement)
-- Claude Code only orchestrates and makes decisions, NO direct code writing
-
-## Overview
-
-Given a PR number, perform comprehensive code review and handle the result. Automatically merges on approval, or triggers fixes via gh-issue-implement on failure.
-
-## When to Use
-
-- User provides a PR number and requests review
-- Called by gh-flow during review phase
-- Automated PR review in CI/CD pipelines
-
-## Usage
-
-**Invoke via skill call:**
 ```
-Call gh-pr-review skill with:
-  - input: pr_number (e.g., 200)
-  - output: JSON { status, merged_sha, issues }
+1. gh pr view <N>              → Get PR info + diff
+2. gh pr checks <N>            → Check CI status
+3. Call codeagent skill:       → Local review
+     backend=codex
+     task: "Review PR #<N>" + diff content
+4. Decision:
+   - CI pass + Score≥4 → gh pr merge
+   - Otherwise → gh-issue-implement to fix
 ```
+
+**Review 完成后**: `gh pr comment` post 结果，`gh pr review --approve/--request-changes` 提交决定。
 
 ## Parameters
 
-| Parameter | Required | Default | Description |
-|-----------|----------|---------|-------------|
-| pr_number | Yes | - | GitHub PR number to review |
-| merge_strategy | No | squash | Merge method: squash, merge, rebase |
-| auto_fix | No | true | Auto-call gh-issue-implement on failure |
-| max_retries | No | 2 | Max fix attempts before marking BLOCKED |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| pr_number | required | PR number to review |
+| merge_strategy | squash | squash/merge/rebase |
+| auto_fix | true | Auto-fix on failure |
+| max_retries | 2 | Fix attempts before BLOCKED |
 
-## Workflow
+## Review Standards
 
-1. **Fetch PR info** via `gh pr view <number>`
-2. **Check CI status** via `gh pr checks <number>`
-3. **Trigger Codex review** via `gh pr comment <number> --body "@codex review"`
-4. **Poll for review result** via `gh pr view <number> --json reviews`
-5. **Process result**:
-   - Pass + CI pass → Approve & merge
-   - CI fail → Comment + trigger fix
-   - Review fail → Request changes + trigger fix
-   - Blocked → Comment issue
+### Scoring
 
-## Code Review via Codex
+| Score | Label | Action |
+|-------|-------|--------|
+| 5 | LGTM 👍 | Merge |
+| 4 | Nitpicks 🤓 | Merge |
+| 3 | Needs Work 🔧 | Fix → gh-issue-implement |
+| 2 | Needs a Lot of Work 🚨 | Fix |
+| 1 | Abandon ❌ | BLOCKED, manual intervention |
 
-**Review Time Expectation:**
-- GitHub Codex review 通常需要 **5～10 分钟** 完成
-- 轮询间隔：首次 5 分钟后检查，之后每 3 分钟检查一次
-- 超时阈值：**15 分钟**无响应视为超时
+### Categories & Severity
 
-**Trigger review:**
-```bash
-gh pr comment <PR_NUMBER> --body "@codex review"
+| Category | Focus |
+|----------|-------|
+| Correctness 🎯 | Bugs, logic errors, null access |
+| Quality ✨ | Structure, DRY, naming |
+| Testing 🧪 | Missing tests, edge cases |
+| Security 🔒 | Injection, secrets, XSS |
 
-# With focus areas
-gh pr comment <PR_NUMBER> --body "@codex review
-Focus on:
-- Security vulnerabilities
-- Performance implications
-- Test coverage gaps"
+| Severity | Merge Impact |
+|----------|--------------|
+| 🔴 HIGH | Blocks merge |
+| 🟡 MEDIUM | Blocks if >2 |
+| 🔵 LOW | Does not block |
+
+### Comment Format
+
 ```
-
-**Fetch review results:**
-```bash
-gh pr view <PR_NUMBER> --comments && \
-echo "=== Reviews ===" && \
-gh api repos/<OWNER>/<REPO>/pulls/<PR_NUMBER>/reviews --jq '.[] | {
-  author: .user.login,
-  state: .state,
-  body: .body,
-  submitted_at: .submitted_at
-}'
+🔴 HIGH | Security | `file.py:42`
+> ```python
+> problematic_code()
+> ```
+Issue description.
 ```
-
-**Why both commands:**
-- `--comments`: Captures inline comments and discussion
-- `/reviews` API: Captures formal review decisions (APPROVED/CHANGES_REQUESTED)
-- Using only one will miss review opinions!
 
 ## Return Format
 
-**Success (merged):**
 ```json
 {
   "pr_number": 200,
-  "status": "MERGED",
-  "merged_sha": "abc123def456",
-  "issues": []
+  "status": "MERGED|CHANGES_REQUESTED|CI_FAILED|BLOCKED",
+  "score": 5,
+  "label": "LGTM",
+  "merged_sha": "abc123|null",
+  "issues": [{"severity": "HIGH", "category": "Security", "file": "auth.ts", "issue": "..."}]
 }
 ```
 
-**Failure:**
-```json
-{
-  "pr_number": 200,
-  "status": "CHANGES_REQUESTED",
-  "merged_sha": null,
-  "issues": ["High cyclomatic complexity in auth.ts", "Missing unit tests"]
-}
-```
+## Error → Status
 
-## Status Codes
-
-| Status | Meaning | Action |
-|--------|---------|--------|
-| `MERGED` | Review passed, PR merged | None |
-| `CI_FAILED` | CI checks failed | Call gh-issue-implement |
-| `CHANGES_REQUESTED` | Code review failed | Call gh-issue-implement |
-| `BLOCKED` | Conflicts or protection rules | Manual intervention |
-
-**Integration**: See [gh-flow Status Codes](../gh-flow/SKILL.md#status-codes-parallel-mode) for orchestration mapping.
-
-## Auto-Fix Flow
-
-When `auto_fix=true` and status is `CI_FAILED` or `CHANGES_REQUESTED`:
-
-```bash
-# Retry loop (max_retries=2 by default)
-for attempt in 1..max_retries:
-  Call gh-issue-implement skill with:
-    - input: linked issue number
-    - task: Fix issues from PR review comments
-    - push to same branch
-
-  Wait for CI/review cycle
-
-  if status == MERGED:
-    return SUCCESS
-
-# After max_retries exhausted
-return BLOCKED with issues list
-```
-
-**Retry behavior**:
-- Each retry creates new commits on same branch
-- No exponential backoff (CI/review is async)
-- After max_retries: mark PR as BLOCKED, require manual intervention
-
-## Review Checklist
-
-| Check | Required | Description |
-|-------|----------|-------------|
-| CI pass | ✅ | All required checks green |
-| PR size | ⚠️ | Warn if > 500 lines changed |
-| Issue linked | ✅ | PR references issue correctly |
-| Code quality | ✅ | Meets project standards |
-| Security | ✅ | No obvious vulnerabilities |
-| Tests | ✅ | New code has test coverage |
-
-## Error Handling
-
-**Codex Review Fallback (超时/用量耗尽):**
-
-当出现以下情况时，切换到 Codeagent 本地 review：
-1. **超时**：15 分钟内无 Codex review 响应
-2. **用量耗尽**：GitHub Codex comment 配额用尽
-
-**Fallback 执行方式：**
-```
-调用 codeagent skill:
-  - backend: codex
-  - 命令: /review PR#<PR_NUMBER>
-  - codeagent 自行获取 PR diff 并执行 review
-```
-
-**判断用量耗尽的信号：**
-- Codex 回复包含 "Codex usage limits have been reached for code reviews"
-- 15 分钟内无任何 Codex review comment
-- `gh pr comment` 返回 403 或 rate limit 错误
-
-| Error | Resolution |
-|-------|------------|
-| PR not found | Return error JSON |
-| No merge permission | Return BLOCKED |
-| Merge conflict | Return BLOCKED with conflict info |
-| CI pending | Wait or return BLOCKED |
-
-## Related Skills
-
-- [gh-flow](../gh-flow/SKILL.md) - Workflow orchestration
-- [gh-issue-implement](../gh-issue-implement/SKILL.md) - Fix issues from review
+| Error | Status |
+|-------|--------|
+| CI failed | CI_FAILED → fix |
+| Review failed | CHANGES_REQUESTED → fix |
+| Conflict/no permission | BLOCKED → manual |
