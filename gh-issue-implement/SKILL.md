@@ -1,217 +1,100 @@
 ---
 name: gh-issue-implement
-description: Implement GitHub issue by number. Fetches issue details via gh cli, directly implements code and tests, creates PR linked to issue. Requires 90% test coverage.
+description: |
+  Implement a GitHub issue end-to-end via gh+git: fetch issue details, create a feature branch, implement code + tests, run checks, commit, push, and open a PR that closes the issue.
+  Use when a user asks to implement issue #N or as part of gh-flow.
 ---
 
-# GitHub Issue Implementation
+# GitHub Issue Implementation (Codex)
 
-## Role in Architecture
+## Goal
 
-```
-Claude Code (主控)
-    │
-    └── gh-issue-implement (本 skill)
-            │
-            └── Claude Code 执行:
-                  - issue 获取
-                  - 分支创建
-                  - 代码实现
-                  - 测试编写和验证
-                  - git commit
-                  - push
-                  - PR 创建
-```
+给定 `issue_number`，在当前仓库中完成实现并创建一个关联 issue 的 PR（`Closes #<issue_number>`）。
 
-**Key Principle**: Claude Code directly implements code, tests, and commits changes.
+## Parameters (conceptual)
 
-## Overview
-
-Given an issue number, fetch its details and directly implement the feature. Ensures 90% test coverage, then creates a PR.
-
-## When to Use
-
-- User provides a GitHub issue number and requests implementation
-- Called by gh-flow during development phase
-- Called by gh-pr-review for fix requests
-
-## Usage
-
-**Invoke via skill call:**
-```
-Call gh-issue-implement skill with:
-  - input: issue_number (e.g., 123)
-  - output: PR number
-```
-
-## Parameters
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| issue_number | Yes | GitHub issue number to implement |
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| issue_number | Yes | - | GitHub issue number |
+| base_branch | No | repo default | Base branch to branch from (usually `main`) |
+| draft_pr | No | false | Create PR as draft |
 
 ## Workflow
 
-1. **Fetch issue** via `gh issue view <number>`
-2. **Create dedicated branch**:
+1. **Preflight**
    ```bash
-   git checkout main && git pull origin main
-   git checkout -b feature/issue-<number>-<short-desc>
-   ```
-3. **Implement code and tests**:
-   - Write implementation code following existing patterns
-   - Write comprehensive unit tests (>=90% coverage)
-   - Run tests and fix any failures
-   - Verify coverage threshold
-4. **Commit changes**:
-   ```bash
-   git add .
-   git commit -m "Implement #<number>: <title>"
-   ```
-5. **Push branch & create PR**:
-   ```bash
-   git push -u origin feature/issue-<number>-<short-desc>
-   gh pr create --title "..." --body "Closes #<number>"
+   gh auth status
+   git status --porcelain
    ```
 
-## Branch Strategy
+2. **Fetch issue details**
+   ```bash
+   gh issue view <ISSUE_NUMBER> --json number,title,body,state,labels,url
+   ```
+   - 若 issue 已关闭：停止并询问是否跳过/重新打开。
 
-**核心原则：每个 Issue 必须有独立分支**
+3. **Determine base branch**
+   - 优先使用仓库默认分支：
+     ```bash
+     gh repo view --json defaultBranchRef --jq .defaultBranchRef.name
+     ```
 
-每个 issue 的实现必须在独立的 feature 分支上进行，确保：
-- 代码变更隔离，便于 review
-- PR 与 issue 一一对应
-- 支持并行开发多个 issue
-- 方便回滚单个功能
+4. **Create branch**
+   - 命名：`feature/issue-<number>-<short-slug>`（2-4 个词，kebab-case）
+   ```bash
+   git fetch origin
+   git checkout <BASE_BRANCH>
+   git pull --ff-only origin <BASE_BRANCH>
+   git checkout -b feature/issue-<number>-<short-slug>
+   ```
 
-### 分支创建流程
+5. **Implement code + tests**
+   - 按仓库既有结构实现功能与必要文档
+   - 为新增/修改逻辑添加单元测试（或仓库主流测试类型）
+   - 运行仓库测试/校验（按项目实际命令）
 
-```bash
-# 1. 确保在最新的 main 分支
-git checkout main
-git pull origin main
+6. **Commit**
+   ```bash
+   git add -A
+   git commit -m "<type>: <summary> (#<ISSUE_NUMBER>)"
+   ```
 
-# 2. 创建 feature 分支
-git checkout -b feature/issue-<number>-<short-desc>
+7. **Push**
+   ```bash
+   git push -u origin feature/issue-<number>-<short-slug>
+   ```
 
-# 示例
-git checkout -b feature/issue-123-user-login
+8. **Create PR**
+   ```bash
+   gh pr create \
+     --title "<issue title>" \
+     --body $'Closes #<ISSUE_NUMBER>\n\n## Summary\n- ...\n\n## Testing\n- ...\n'
+   ```
+   - 若该分支已有 PR：改为更新分支提交，并在现有 PR 下继续工作。
+
+## Return Format (for orchestration)
+
+```json
+{
+  "issue_number": 123,
+  "branch": "feature/issue-123-user-login",
+  "pr_number": 200,
+  "url": "https://github.com/owner/repo/pull/200"
+}
 ```
-
-### 分支命名规范
-
-```
-feature/issue-{number}-{short-description}
-
-格式说明:
-- feature/    : 固定前缀，表示功能开发
-- issue-      : 标识关联的 GitHub issue
-- {number}    : issue 编号（必须）
-- {short-desc}: 简短描述，用连字符连接（2-4个单词）
-
-Examples:
-- feature/issue-123-user-login
-- feature/issue-456-jwt-management
-- feature/issue-789-add-export-csv
-```
-
-### 分支生命周期
-
-```
-main ──────────────────────────────────────────► main
-       │                                    ▲
-       │ git checkout -b                    │ merge (squash)
-       ▼                                    │
-       feature/issue-123-xxx ──► PR #200 ───┘
-                    │
-                    └── commits by Claude Code
-```
-
-1. **创建**: 从最新 main 分支切出
-2. **开发**: 直接在分支上编写代码和测试
-3. **提交**: git commit 提交变更
-4. **推送**: `git push -u origin <branch>`
-5. **PR**: 创建 PR 并关联 issue
-6. **合并**: review 通过后 squash merge
-7. **清理**: 合并后删除 feature 分支
-
-## Implementation Guidelines
-
-**Code Quality:**
-- Follow existing code patterns in the repository
-- Keep functions small and focused
-- Use clear, descriptive variable names
-- Add comments only for non-obvious logic
-
-**Testing:**
-- Write unit tests for all new functions
-- Test happy path and edge cases
-- Test error handling
-- Verify >= 90% test coverage
-
-**Commit Message:**
-```
-Implement #<issue_number>: <short description>
-
-- Bullet point summary of changes
-- Focus on what and why, not how
-
-Closes #<issue_number>
-```
-
-## Return Format
-
-```
-Issue Development Complete:
-- Issue: #123 - User login feature
-- Branch: feature/issue-123-user-login
-- PR: #200
-
-Changed Files:
-- src/auth/login.ts (+120, -5)
-- src/auth/login.test.ts (+200)
-
-Test Coverage: 92%
-CI Status: pending
-```
-
-## PR Template
-
-```markdown
-## Summary
-Implements #<issue_number>
-
-## Changes
-- Change 1
-- Change 2
-
-## Testing
-- [x] Unit tests passing
-- [x] Coverage >= 90%
-
-Closes #<issue_number>
-```
-
-## Epic Detection
-
-Sub-issues are identified by:
-- Having `sub-task` label
-- Body contains `Part of #<epic>` or `Epic: #<epic>`
-
-When detected, verifies epic exists and has `epic` label before associating.
 
 ## Error Handling
 
 | Error | Resolution |
 |-------|------------|
-| Issue not found | Return error |
-| Issue closed | Prompt to reopen or skip |
-| Branch exists | Switch to existing branch, verify clean state |
-| Branch diverged | Rebase on main: `git rebase main` |
-| PR exists | Update existing PR |
-| Tests fail | Fix and retry |
-| Push rejected | Pull and rebase, then retry push |
+| Issue not found | 确认仓库/编号是否正确 |
+| Issue closed | 询问是否跳过或 `gh issue reopen <n>` |
+| Dirty working tree | stash/commit 或在新目录操作 |
+| Branch exists | `git checkout <branch>` 并确认与远端一致 |
+| Push rejected | `git pull --rebase` 后重试（避免强推，必要时先确认） |
+| Tests fail | 优先修复测试与实现，再提交/推送 |
 
 ## Related Skills
 
-- [gh-flow](../gh-flow/SKILL.md) - Workflow orchestration
-- [gh-pr-review](../gh-pr-review/SKILL.md) - Review created PRs
+- [gh-flow](../gh-flow/SKILL.md) - End-to-end orchestration
+- [gh-pr-review](../gh-pr-review/SKILL.md) - Review/merge PR after implementation

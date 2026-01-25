@@ -1,15 +1,13 @@
 ---
 name: gh-release
-description: Generate Release Notes and create GitHub Release. Calculates version number, generates notes from merged PRs (auto/custom/epic modes), creates release via gh cli.
+description: Generate Release Notes and publish a GitHub Release via gh CLI. Calculate a version tag and generate notes from merged PRs (auto/custom/epic modes). Use after PRs are merged (often as the last stage of gh-flow).
 ---
 
 # GitHub Release Notes Generation
 
-## Role in Architecture
+## Role in gh-flow
 
-See [gh-flow Architecture](../gh-flow/SKILL.md#architecture) for complete workflow diagram.
-
-**This skill**: Mostly Claude Code execution (gh cli calls). Codeagent optional for complex notes.
+Used by [gh-flow](../gh-flow/SKILL.md) Stage 3 to generate release notes and publish a release via `gh release create`.
 
 ## Overview
 

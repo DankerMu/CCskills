@@ -1,172 +1,104 @@
 ---
 name: gh-flow
 description: |
-  GitHub 完整开发工作流编排器。从 PRD 到代码合并的端到端自动化流程。
-  串联调用 gh-create-issue、gh-issue-implement、gh-pr-review、gh-release 四个 skills。
-  支持全自动模式和半自动模式（关键步骤需用户确认）。
-  触发条件：用户要求"完整实现某功能"、"从需求到上线"、"端到端开发"时使用此技能。
+  GitHub 端到端开发工作流编排（Codex 版）：从 PRD/需求 → 创建 issues（可含 epic）→ 实现 → PR review/merge → release。
+  串联 gh-create-issue、gh-issue-implement、gh-pr-review、gh-release 四个 skills。
+  仅支持串行执行（无并行/多目录 clone）。
+  触发：用户要求“端到端开发 / 从需求到上线 / 完整实现某功能 / 需求→issue→PR→release 全流程”时使用。
 ---
 
-# GitHub Flow Orchestrator
+# GitHub Flow Orchestrator (Codex)
 
-## Architecture
+## What this skill does
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Claude Code (主控)                        │
-│         调度 skills / 审核结果 / 决策 / 直接实现代码          │
-├─────────────────────────────────────────────────────────────┤
-│  gh-flow (编排层)                                            │
-│    │                                                         │
-│    ├── gh-create-issue ──→ 分析需求、拆分任务                 │
-│    │                                                         │
-│    ├── gh-issue-implement ──→ 直接实现代码和测试              │
-│    │                                                         │
-│    ├── gh-pr-review ──→ 使用 /review 命令审查代码            │
-│    │                                                         │
-│    └── gh-release ──→ 生成 release notes                    │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
+- 把 PRD/需求拆解为可执行的 GitHub issues（可选：epic + 子任务 + 依赖）
+- 按依赖顺序串行实现每个 issue（每个 issue 一个 PR）
+- 审查 PR、按需修复，并在 CI 通过时合并
+- 可选：基于合并 PR 生成 Release Notes 并发布 GitHub Release
 
-**Responsibility Separation:**
-- **Claude Code**: Orchestration, implementation, code review, and decision-making.
-- **Skills**: Define workflow steps and execute tasks.
+## Inputs (optional)
 
-**Skill Loading (执行前必须加载对应 skill):**
-| Stage | Skill | 加载命令 |
-|-------|-------|---------|
-| Issue 创建 | gh-create-issue | `/gh-create-issue` |
-| Issue 实现 | gh-issue-implement | `/gh-issue-implement` |
-| PR Review | gh-pr-review | `/gh-pr-review` |
-| Release | gh-release | `/gh-release` |
+- `prd_content`: Stage 1 的输入（若你已有 issue 列表，可不提供）
+- `mode`: `manual`(default) 或 `auto`
+- `generate_release`: `true|false` (default: `false`)
+- `stage`: `all|create-issue|implement|review|release`
+- `issues`: 已存在的 issue numbers（跳过 Stage 1）
+- `prs`: 已存在的 PR numbers（跳过 Stage 2）
 
-## Parameters
+## Workflow (serial only)
 
-| Parameter | Required | Default | Description |
-|-----------|----------|---------|-------------|
-| prd_content | Yes | - | PRD or requirements document |
-| mode | No | manual | auto (unattended) or manual (confirm each step) |
-| generate_release | No | false | Generate release after merge |
-
-## Workflow
-
-### Stage 1: Issue Creation
-```bash
-# Call gh-create-issue skill
-# Output: { epic_num: 100, issues: [
-#   { num: 101, title: "Login API", depends_on: [] },
-#   { num: 102, title: "JWT management", depends_on: [101] },
-#   { num: 104, title: "Logging", depends_on: [] }
-# ]}
-```
-
-### Stage 2: Implementation (串行模式)
+### Stage 0: Preconditions
 
 ```bash
-# Issue 101
-# Step 1: gh-issue-implement → 直接实现代码 + 创建 PR #200
-# Step 2: gh-pr-review #200 → CI 检测 + /review 审查 + 合并
-#         (CI pass + Review pass 才合并，否则修复重试)
+gh auth status
+git status --porcelain
+```
 
-# Issue 102 (after 101 merged)
-# ... repeat: gh-issue-implement → gh-pr-review
+如未登录：执行 `gh auth login` 并确认对目标仓库有 issue/PR/release 权限。
 
-# Issue 104 (after 102 merged)
-# ... repeat: gh-issue-implement → gh-pr-review
+### Stage 1: Create Issues
+
+按 `../gh-create-issue/SKILL.md` 执行，产出结构化结果供编排使用。
+
+建议输出（示例）：
+```json
+{
+  "epic_num": 100,
+  "issues": [
+    { "num": 101, "title": "Login API implementation", "priority": 2, "depends_on": [] },
+    { "num": 102, "title": "JWT token management", "priority": 2, "depends_on": [101] }
+  ]
+}
+```
+
+### Stage 2: Implement → Review → Merge（逐个 issue）
+
+执行顺序：
+1. 先按 `depends_on` 做拓扑排序（依赖优先）；无依赖时按 `priority` → `issue number` 排序
+2. 每个 issue 完整跑完一轮：「实现 → review/修复 → CI 绿 → 合并」，再开始下一个
+
+编排伪代码：
+```
+issues := topo_sort_by_depends_on(issues)
+for issue in issues:
+  pr := gh-issue-implement(issue.num)
+  result := gh-pr-review(pr.pr_number)
+  if result.status != MERGED:
+    stop and report (BLOCKED/FAILED)
 ```
 
 ### Stage 3: Release (optional)
-```bash
-# If generate_release=true
-# Pass epic_number from Stage 1 (gh-create-issue output)
-gh release create v1.2.0 --generate-notes --notes "Epic #100 complete"
 
-# Or call gh-release skill with epic mode:
-# gh-release --mode epic --epic_number 100 --prs 200,201,202
-```
+当 `generate_release=true` 且目标 PR 已合并，按 `../gh-release/SKILL.md` 执行：
+- 需要 epic 视角：用 `mode=epic`（传 `epic_number`）
+- 只按 PR 列表：用 `mode=custom` 或 `mode=auto`
 
-## Execution Modes
+## Manual mode confirmations
 
-| Mode | Behavior |
-|------|----------|
-| auto | Runs unattended, pauses only on errors |
-| manual | Confirms before each major step |
+- Stage 1 完成后：确认 issue 列表、依赖关系、实现顺序
+- 每个 PR 合并前：确认 merge 策略（默认 squash）与是否要合并
+- 发布 release 前：确认 tag 与 release notes
 
-**Manual mode checkpoints:**
-- After issue creation: "Continue to development?"
-- After each PR: "Continue to next issue?"
-- Before merge: "Merge this PR?"
-- Before release: "Generate release?"
+## Status Codes (for summaries)
 
-## Partial Execution
+| Status | Meaning |
+|--------|---------|
+| SUCCESS | Issue 已实现且 PR 已合并 |
+| BLOCKED | 需要人工介入（权限/冲突/保护规则等） |
+| FAILED | 自动修复重试耗尽仍失败 |
+| DEPENDENCY_BLOCKED | 依赖未合并，无法继续 |
+| SKIPPED | 用户选择跳过 |
 
-Start from specific stage:
-```
---stage create-issue --prd "content"     # Only create issues
---stage implement --issues 101,102,103   # Start from existing issues
---stage review --prs 200,201,202         # Only review/merge PRs
---stage release --prs 200,201 --tag v1.0 # Only generate release
-```
-
-## Return Format
+## Return summary (example)
 
 ```
 ========================================
 GitHub Flow Complete
 ========================================
-📋 Issues: 3
-💻 PRs: 3
-✅ Merged: 3
-📦 Release: v1.2.0
-
-Epic #100 Progress:
-- [x] #101 Login API
-- [x] #102 JWT management
-- [ ] #103 Permission middleware
-========================================
-```
-
-## Prerequisites
-
-```bash
-gh auth status   # Must be authenticated
-command -v jq    # Required for JSON parsing
-command -v git   # Required for version control
-```
-
-## Error Handling
-
-| Stage | Error | Resolution |
-|-------|-------|------------|
-| Issue creation | Permission denied | Check gh auth scope |
-| Development | Tests fail | Fix and retry |
-| Review | CI fail | gh-pr-review triggers fix |
-| Review | Changes requested | gh-pr-review triggers fix |
-| Merge | Conflict | Return BLOCKED, manual resolution |
-| Release | Tag exists | gh-release auto-increments |
-
-### Status Code Mapping
-
-Integration with gh-pr-review status codes:
-
-| gh-pr-review | gh-flow | Meaning |
-|--------------|---------|---------|
-| MERGED | SUCCESS | PR merged successfully |
-| CI_FAILED | FAILED | CI checks failed, retry exhausted |
-| CHANGES_REQUESTED | FAILED | Code review failed, retry exhausted |
-| BLOCKED | BLOCKED | Manual intervention required |
-
-## Return Format
-
-```
-========================================
-GitHub Flow Complete
-========================================
-📋 Issues: 3
-💻 PRs: 3
-✅ Merged: 3
-📦 Release: v1.2.0
+Issues processed: 3
+PRs created: 3
+PRs merged: 3
+Release: v1.2.0
 
 Epic #100 Progress:
 - [x] #101 Login API
@@ -178,6 +110,6 @@ Epic #100 Progress:
 ## Related Skills
 
 - [gh-create-issue](../gh-create-issue/SKILL.md) - Issue creation and epic management
-- [gh-issue-implement](../gh-issue-implement/SKILL.md) - Issue implementation
-- [gh-pr-review](../gh-pr-review/SKILL.md) - PR review and merge
-- [gh-release](../gh-release/SKILL.md) - Release notes generation
+- [gh-issue-implement](../gh-issue-implement/SKILL.md) - Issue implementation (code + tests + PR)
+- [gh-pr-review](../gh-pr-review/SKILL.md) - PR review and merge (with CI)
+- [gh-release](../gh-release/SKILL.md) - Release notes generation and publishing

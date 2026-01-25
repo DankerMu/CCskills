@@ -1,15 +1,13 @@
 ---
 name: gh-create-issue
-description: Create GitHub issues from PRD or requirements. Auto-detects complexity - simple tasks create single issue, complex tasks create epic + sub-issues structure. Uses gh cli with unified labels.
+description: Create GitHub issues from PRD/requirements. Decide whether to create a single issue or an epic + sub-issues structure (with dependencies). Use when Codex needs to break down requirements into actionable GitHub issues via gh CLI.
 ---
 
 # GitHub Issue Creation
 
-## Role in Architecture
+## Role in gh-flow
 
-See [gh-flow Architecture](../gh-flow/SKILL.md#architecture) for complete workflow diagram.
-
-**This skill**: Claude Code directly executes (no code writing involved).
+Used by [gh-flow](../gh-flow/SKILL.md) Stage 1 to turn requirements into an executable issue list (optionally: epic + sub-issues + dependencies). Execute with `gh` CLI in the current repo.
 
 ## Overview
 
@@ -23,12 +21,7 @@ Analyze PRD/requirements and create appropriate GitHub issues. Automatically det
 
 ## Usage
 
-**Invoke via skill call:**
-```
-Call gh-create-issue skill with:
-  - input: PRD content or requirements text
-  - output: Created issue numbers (epic + sub-issues if complex)
-```
+Input: PRD content or requirements text. Output: created issue numbers (single issue, or epic + sub-issues if complex).
 
 ## Parameters
 
