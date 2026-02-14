@@ -80,6 +80,13 @@ npx openskills install https://github.com/DankerMu/CCskills/tree/master/deep-res
 | [skill-from-masters-skill](./skill-from-masters-skill) | Create skills by discovering and incorporating expert methodologies |
 | [skill-from-notebook](./skill-from-notebook) | Extract methodologies from documents or examples to create skills |
 
+## Acknowledgements
+
+Some skills in this collection are inspired by or adapted from:
+
+- [okwinds/miscellany](https://github.com/okwinds/miscellany)
+- [cexll/myclaude](https://github.com/cexll/myclaude)
+
 ## License
 
 MIT
