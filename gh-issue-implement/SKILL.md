@@ -29,7 +29,7 @@ Claude Code (主控)
 1. gh issue view <N>                           → Get issue details
 2. git checkout main && git pull
 3. git checkout -b feature/issue-<N>-<desc>    → Create branch
-4. Call codeagent skill (backend=codex)        → Implement + test
+4. Call codeagent skill (backend=codex)        → Implement + test (可能需要数小时；不要因为耗时而中断/kill)
 5. git push -u origin <branch>
 6. gh pr create --body "Closes #<N>"           → Create PR
 ```
@@ -45,6 +45,14 @@ Examples:
 ```
 
 ## Codeagent Invocation
+
+### Long-running `codeagent-wrapper` (IMPORTANT)
+
+`codeagent-wrapper` 执行时间可能长达数小时。**不要因为运行时间过长而 SIGINT / kill 掉进程**（除非用户明确要求取消，或你有充分证据表明进程已卡死）。
+
+- `timeout`/等待时间建议按任务复杂度动态设置：简单 **30m（1800000ms）** / 中等 **1h（3600000ms）** / 复杂 **2h（7200000ms）**（不确定先用 1h）。
+- 避免使用 shell 的 `timeout ...` 这类“到点自动 kill”的包装器；优先使用执行环境/工具层的 timeout 配置（例如 `CODEX_TIMEOUT`），并在需要时延长等待（不要 kill）。
+- 如果 `codeagent-wrapper` 输出了 `session_id`，请记录；意外中断时可用 `codeagent-wrapper resume ...` 恢复（以 `codeagent-wrapper --help` 为准）。
 
 **Command**:
 ```bash
@@ -109,5 +117,6 @@ Closes #<issue_number>
 |-------|------------|
 | Issue not found | Return error |
 | Branch exists | Switch to existing, verify clean |
+| `codeagent-wrapper` takes a long time | Expected sometimes; **do not kill by runtime**. Wait; only intervene if the user cancels or it's clearly stuck. |
 | Tests fail | Codeagent retries until pass |
 | Push rejected | Rebase and retry |
