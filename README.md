@@ -70,6 +70,7 @@ npx openskills install https://github.com/DankerMu/CCskills/tree/master/deep-res
 | [prototype-prompt-generator](./prototype-prompt-generator) | Generate structured prompts for UI/UX prototypes across multiple design systems |
 | [product-requirements](./product-requirements) | Interactive requirements gathering, analysis, and PRD generation |
 | [brainstorming](./brainstorming) | Turn vague ideas into validated designs through structured brainstorming |
+| [doc-workflow](./doc-workflow) | DR-driven iterative document workflow with multi-round deep-research validation |
 
 ### Skill Creation
 
